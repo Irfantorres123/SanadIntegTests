@@ -200,32 +200,127 @@ def cleanup_test_users(phone_prefix: str = "+1555") -> int:
     """
     Cleanup test users by phone prefix.
     This removes all users whose phone starts with the given prefix.
-    
+
     Args:
         phone_prefix: Phone number prefix to match (default: +1555 for test numbers)
-    
+
     Returns:
         Number of users deleted
     """
     conn = get_db_connection()
     cursor = conn.cursor()
-    
+
     try:
         # Delete from admin table first
         cursor.execute('DELETE FROM admin WHERE phone LIKE %s', (f'{phone_prefix}%',))
         admin_count = cursor.rowcount
-        
+
         # Delete from user table
         cursor.execute('DELETE FROM "user" WHERE phone LIKE %s', (f'{phone_prefix}%',))
         user_count = cursor.rowcount
-        
+
         conn.commit()
         print(f"Cleaned up {admin_count} admins and {user_count} users with prefix {phone_prefix}")
         return user_count
-    
+
     except Exception as e:
         conn.rollback()
         print(f"Error during cleanup: {e}")
+        return 0
+    finally:
+        cursor.close()
+        conn.close()
+
+
+# Group-related database utilities
+
+def get_group_by_id(group_id: str) -> Optional[Dict]:
+    """Get group by ID from database"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute('SELECT * FROM "group" WHERE id = %s', (group_id,))
+        row = cursor.fetchone()
+
+        if row:
+            return {
+                "id": row[0],
+                "name": row[1],
+                "created_by": row[2],
+                "created_at": row[3],
+                "updated_at": row[4]
+            }
+        return None
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def get_group_members(group_id: str):
+    """Get all members of a group"""
+    from typing import List, Any
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute('''
+            SELECT ug.id, ug.user_id, u.first_name, u.last_name, u.phone
+            FROM user_group ug
+            JOIN "user" u ON ug.user_id = u.id
+            WHERE ug.group_id = %s
+        ''', (group_id,))
+        rows = cursor.fetchall()
+
+        return [
+            {
+                "id": row[0],
+                "user_id": row[1],
+                "first_name": row[2],
+                "last_name": row[3],
+                "phone": row[4]
+            }
+            for row in rows
+        ]
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def delete_group_by_id(group_id: str) -> bool:
+    """Delete group from database (cascade deletes user_group entries)"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute('DELETE FROM "group" WHERE id = %s', (group_id,))
+        conn.commit()
+        print(f"Deleted group: {group_id}")
+        return True
+    except Exception as e:
+        conn.rollback()
+        print(f"Error deleting group: {e}")
+        return False
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def cleanup_test_groups(user_id: str) -> int:
+    """Delete all groups created by a user (for cleanup)"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute('DELETE FROM "group" WHERE created_by = %s', (user_id,))
+        count = cursor.rowcount
+        conn.commit()
+        print(f"Cleaned up {count} groups for user {user_id}")
+        return count
+    except Exception as e:
+        conn.rollback()
+        print(f"Error during group cleanup: {e}")
         return 0
     finally:
         cursor.close()

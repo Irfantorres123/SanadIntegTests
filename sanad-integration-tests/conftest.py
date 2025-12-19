@@ -122,6 +122,66 @@ def registered_user(api_client, invited_user, test_user_email, test_otp):
         "access_token": user_data.get("accessToken"),
         "client": api_client
     }
-    
+
     # Cleanup
     delete_user_by_phone(phone)
+
+@pytest.fixture
+def second_registered_user(api_client, root_user_client, test_otp):
+    """Second registered user for multi-user group tests"""
+    phone = f"+1202555{uuid.uuid4().int % 10000:04d}"
+    email = f"user2.{uuid.uuid4().hex[:8]}@example.com"
+
+    # Root user invites
+    root_user_client.invite_contacts([{"phone": phone}])
+
+    # New client for second user
+    fresh_client = SanadAPIClient(api_client.base_url)
+
+    # Send OTP and register
+    fresh_client.user_send_otp(phone, "REGISTER")
+    register_response = fresh_client.user_register(
+        phone=phone,
+        first_name="Second",
+        last_name="User",
+        email=email,
+        verification_code=test_otp
+    )
+    assert register_response.status_code == 200
+
+    user_data = register_response.json()["data"]
+
+    yield {
+        "phone": phone,
+        "email": email,
+        "user_id": user_data["userId"],
+        "access_token": user_data["accessToken"],
+        "client": fresh_client
+    }
+
+    # Cleanup
+    delete_user_by_phone(phone)
+
+@pytest.fixture
+def test_group(registered_user):
+    """Create a test group for the registered user"""
+    client = registered_user["client"]
+
+    # Create group
+    response = client.group_create("Test Group")
+    assert response.status_code == 200
+
+    group_data = response.json()["data"]
+    group_id = group_data["groupId"]
+
+    yield {
+        "group_id": group_id,
+        "name": "Test Group",
+        "owner": registered_user
+    }
+
+    # Cleanup (delete group)
+    try:
+        client.group_delete(group_id)
+    except:
+        pass  # Group might be deleted by test

@@ -101,3 +101,60 @@ class SanadAPIClient:
     def get_all_otp(self) -> requests.Response:
         """Get all active OTPs (debug endpoint)"""
         return self.session.get(f"{self.base_url}/api/v1/user/get-all-otp")
+
+    # Group Management Methods
+
+    def group_create(self, name: str) -> requests.Response:
+        """Create a new group"""
+        return self.session.post(
+            f"{self.base_url}/api/v1/group/create",
+            json={"name": name}
+        )
+
+    def group_add_users(self, group_id: str, user_ids: Optional[List[str]] = None,
+                        new_users: Optional[List[Dict[str, str]]] = None,
+                        group_name: Optional[str] = None) -> requests.Response:
+        """Add/update users in a group (SYNC operation)"""
+        payload = {"groupId": group_id}
+        if user_ids is not None:
+            payload["userIds"] = user_ids
+        if new_users is not None:
+            payload["newUsers"] = new_users
+        if group_name is not None:
+            payload["groupName"] = group_name
+        return self.session.post(
+            f"{self.base_url}/api/v1/group/add-users",
+            json=payload
+        )
+
+    def group_get_all(self, page_size: Optional[int] = None,
+                      page: Optional[int] = None) -> requests.Response:
+        """Get all groups for authenticated user"""
+        payload = {}
+        if page_size is not None:
+            payload["pageSize"] = page_size
+        if page is not None:
+            payload["page"] = page
+        return self.session.post(
+            f"{self.base_url}/api/v1/group/get-all",
+            json=payload
+        )
+
+    def group_get_users_to_add(self, group_id: Optional[str] = None,
+                               contact_list: Optional[List[Dict[str, str]]] = None) -> requests.Response:
+        """Get users and contacts to add to group"""
+        payload = {}
+        if group_id is not None:
+            payload["groupId"] = group_id
+        if contact_list is not None:
+            payload["contactList"] = contact_list
+        return self.session.post(
+            f"{self.base_url}/api/v1/group/get-users-to-add",
+            json=payload
+        )
+
+    def group_delete(self, group_id: str) -> requests.Response:
+        """Delete a group"""
+        return self.session.delete(
+            f"{self.base_url}/api/v1/group/delete/{group_id}"
+        )
