@@ -2,7 +2,7 @@
 import uuid
 import hashlib
 import psycopg2
-from typing import Optional, Dict
+from typing import Optional, Dict, List, Any
 import os
 from dotenv import load_dotenv
 
@@ -10,7 +10,6 @@ load_dotenv()
 
 
 def get_db_connection():
-    """Create database connection"""
     return psycopg2.connect(
         host=os.getenv("DB_HOST", "localhost"),
         port=int(os.getenv("DB_PORT", 5432)),
@@ -27,26 +26,14 @@ def create_test_user(
     email: Optional[str] = None,
     created_by: Optional[str] = None
 ) -> Dict[str, str]:
-    """
-    Create a test user in the database.
-    
-    Args:
-        phone: Phone number (E.164 format)
-        first_name: User's first name (optional, None for invited-only users)
-        last_name: User's last name (optional)
-        email: User's email (optional)
-        created_by: UUID of the user who invited this user (optional)
-    
-    Returns:
-        Dict with user_id and phone_hash
-    """
+    """Create user in database. Set first_name=None for invited-only users."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    
+
     try:
         user_id = str(uuid.uuid4())
         phone_hash = hashlib.sha256(phone.encode()).hexdigest()
-        
+
         cursor.execute(
             '''
             INSERT INTO "user" (
@@ -58,12 +45,12 @@ def create_test_user(
             ''',
             (user_id, phone_hash, phone if first_name else None, first_name, last_name, email, created_by)
         )
-        
+
         conn.commit()
         print(f"Created test user: {user_id} (phone: {phone})")
-        
+
         return {"user_id": user_id, "phone_hash": phone_hash, "phone": phone}
-    
+
     except Exception as e:
         conn.rollback()
         print(f"Error creating user: {e}")
@@ -74,27 +61,14 @@ def create_test_user(
 
 
 def create_admin_user(phone: str, first_name: str = "Test", last_name: str = "Admin", email: str = "testadmin@test.com") -> Dict[str, str]:
-    """
-    Create an admin user (both in user and admin tables).
-    This creates a fully registered user who is also an admin.
-    
-    Args:
-        phone: Admin phone number
-        first_name: Admin first name
-        last_name: Admin last name
-        email: Admin email
-    
-    Returns:
-        Dict with admin_id and phone
-    """
+    """Create admin user (both in user and admin tables)"""
     conn = get_db_connection()
     cursor = conn.cursor()
-    
+
     try:
         admin_id = str(uuid.uuid4())
         phone_hash = hashlib.sha256(phone.encode()).hexdigest()
-        
-        # Create user record
+
         cursor.execute(
             '''
             INSERT INTO "user" (
@@ -106,8 +80,7 @@ def create_admin_user(phone: str, first_name: str = "Test", last_name: str = "Ad
             ''',
             (admin_id, phone_hash, phone, first_name, last_name, email)
         )
-        
-        # Create admin record
+
         cursor.execute(
             '''
             INSERT INTO admin (
@@ -118,12 +91,12 @@ def create_admin_user(phone: str, first_name: str = "Test", last_name: str = "Ad
             ''',
             (admin_id, phone, admin_id)
         )
-        
+
         conn.commit()
         print(f"Created admin user: {admin_id} (phone: {phone})")
-        
+
         return {"admin_id": admin_id, "phone": phone, "email": email}
-    
+
     except Exception as e:
         conn.rollback()
         print(f"Error creating admin: {e}")
@@ -134,23 +107,19 @@ def create_admin_user(phone: str, first_name: str = "Test", last_name: str = "Ad
 
 
 def delete_user_by_phone(phone: str) -> bool:
-    """Delete user by phone number (for cleanup)"""
     conn = get_db_connection()
     cursor = conn.cursor()
-    
+
     try:
         phone_hash = hashlib.sha256(phone.encode()).hexdigest()
-        
-        # First delete from admin table if exists
+
         cursor.execute('DELETE FROM admin WHERE phone = %s', (phone,))
-        
-        # Then delete from user table
         cursor.execute('DELETE FROM "user" WHERE phone_hash = %s OR phone = %s', (phone_hash, phone))
-        
+
         conn.commit()
         print(f"Deleted user with phone: {phone}")
         return True
-    
+
     except Exception as e:
         conn.rollback()
         print(f"Error deleting user: {e}")
@@ -161,13 +130,12 @@ def delete_user_by_phone(phone: str) -> bool:
 
 
 def get_user_by_phone(phone: str) -> Optional[Dict]:
-    """Get user by phone number"""
     conn = get_db_connection()
     cursor = conn.cursor()
-    
+
     try:
         phone_hash = hashlib.sha256(phone.encode()).hexdigest()
-        
+
         cursor.execute(
             '''
             SELECT id, phone_hash, phone, first_name, last_name, email, created_by, created_at
@@ -176,7 +144,7 @@ def get_user_by_phone(phone: str) -> Optional[Dict]:
             ''',
             (phone_hash, phone)
         )
-        
+
         row = cursor.fetchone()
         if row:
             return {
@@ -190,32 +158,21 @@ def get_user_by_phone(phone: str) -> Optional[Dict]:
                 "created_at": row[7].isoformat() if row[7] else None
             }
         return None
-    
+
     finally:
         cursor.close()
         conn.close()
 
 
 def cleanup_test_users(phone_prefix: str = "+1555") -> int:
-    """
-    Cleanup test users by phone prefix.
-    This removes all users whose phone starts with the given prefix.
-
-    Args:
-        phone_prefix: Phone number prefix to match (default: +1555 for test numbers)
-
-    Returns:
-        Number of users deleted
-    """
+    """Delete all users whose phone starts with prefix (default: +1555 for test numbers)"""
     conn = get_db_connection()
     cursor = conn.cursor()
 
     try:
-        # Delete from admin table first
         cursor.execute('DELETE FROM admin WHERE phone LIKE %s', (f'{phone_prefix}%',))
         admin_count = cursor.rowcount
 
-        # Delete from user table
         cursor.execute('DELETE FROM "user" WHERE phone LIKE %s', (f'{phone_prefix}%',))
         user_count = cursor.rowcount
 
@@ -232,10 +189,7 @@ def cleanup_test_users(phone_prefix: str = "+1555") -> int:
         conn.close()
 
 
-# Group-related database utilities
-
 def get_group_by_id(group_id: str) -> Optional[Dict]:
-    """Get group by ID from database"""
     conn = get_db_connection()
     cursor = conn.cursor()
 
@@ -257,10 +211,7 @@ def get_group_by_id(group_id: str) -> Optional[Dict]:
         conn.close()
 
 
-def get_group_members(group_id: str):
-    """Get all members of a group"""
-    from typing import List, Any
-
+def get_group_members(group_id: str) -> List[Dict[str, Any]]:
     conn = get_db_connection()
     cursor = conn.cursor()
 
@@ -289,7 +240,6 @@ def get_group_members(group_id: str):
 
 
 def delete_group_by_id(group_id: str) -> bool:
-    """Delete group from database (cascade deletes user_group entries)"""
     conn = get_db_connection()
     cursor = conn.cursor()
 
@@ -308,7 +258,6 @@ def delete_group_by_id(group_id: str) -> bool:
 
 
 def cleanup_test_groups(user_id: str) -> int:
-    """Delete all groups created by a user (for cleanup)"""
     conn = get_db_connection()
     cursor = conn.cursor()
 
@@ -322,6 +271,136 @@ def cleanup_test_groups(user_id: str) -> int:
         conn.rollback()
         print(f"Error during group cleanup: {e}")
         return 0
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def get_campaign_by_id(campaign_id: str) -> Optional[Dict]:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute('''
+            SELECT id, title, image, type, status, end_date, duration,
+                   familiar_duration, total_amount, amount_raised, description,
+                   payment_details, is_deleted, total_reports, created_by,
+                   created_at, updated_at
+            FROM "campaign"
+            WHERE id = %s
+        ''', (campaign_id,))
+        row = cursor.fetchone()
+
+        if row:
+            return {
+                "id": row[0],
+                "title": row[1],
+                "image": row[2],
+                "type": row[3],
+                "status": row[4],
+                "end_date": row[5],
+                "duration": row[6],
+                "familiar_duration": row[7],
+                "total_amount": row[8],
+                "amount_raised": row[9],
+                "description": row[10],
+                "payment_details": row[11],
+                "is_deleted": row[12],
+                "total_reports": row[13],
+                "created_by": row[14],
+                "created_at": row[15],
+                "updated_at": row[16]
+            }
+        return None
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def get_campaign_groups(campaign_id: str) -> List[Dict[str, Any]]:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute('''
+            SELECT cg.id, cg.group_id, g.name
+            FROM campaign_group cg
+            JOIN "group" g ON cg.group_id = g.id
+            WHERE cg.campaign_id = %s
+        ''', (campaign_id,))
+        rows = cursor.fetchall()
+
+        return [
+            {
+                "id": row[0],
+                "group_id": row[1],
+                "group_name": row[2]
+            }
+            for row in rows
+        ]
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def delete_campaign_by_id(campaign_id: str) -> bool:
+    """Soft delete - sets is_deleted=true"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute(
+            'UPDATE "campaign" SET is_deleted = true WHERE id = %s',
+            (campaign_id,)
+        )
+        conn.commit()
+        print(f"Deleted campaign: {campaign_id}")
+        return True
+    except Exception as e:
+        conn.rollback()
+        print(f"Error deleting campaign: {e}")
+        return False
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def cleanup_test_campaigns(user_id: str) -> int:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute(
+            'UPDATE "campaign" SET is_deleted = true WHERE created_by = %s',
+            (user_id,)
+        )
+        count = cursor.rowcount
+        conn.commit()
+        print(f"Cleaned up {count} campaigns for user {user_id}")
+        return count
+    except Exception as e:
+        conn.rollback()
+        print(f"Error during campaign cleanup: {e}")
+        return 0
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def get_user_edge_count(campaign_id: str, user_id: str) -> int:
+    """Count UserEdge entries for bug #10 deduplication testing"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute('''
+            SELECT COUNT(*)
+            FROM user_edge
+            WHERE campaign_id = %s AND shared_to = %s
+        ''', (campaign_id, user_id))
+
+        count: int = cursor.fetchone()[0]
+        return count
     finally:
         cursor.close()
         conn.close()
