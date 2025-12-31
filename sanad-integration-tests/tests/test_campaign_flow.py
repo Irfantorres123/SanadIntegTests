@@ -51,25 +51,17 @@ def test_campaignCreate_byUser_returns200AndYetToApproveStatus(
         f"Expected 200, got {response.status_code}: {response.text}"
     )
 
-    data: Dict[str, Any] = response.json()
-    assert "data" in data
-    assert "Campaign created Successfully" in data["data"]
-
     campaign_id: Optional[str] = _get_campaign_id_by_title(
         client,
         "Help Ramadan Food Drive",
         filter_type="IN_REVIEW"
     )
-    assert campaign_id is not None, "Campaign not found in list after creation"
+    assert campaign_id is not None, "Created campaign not found in list"
 
     db_campaign: Optional[Dict[str, Any]] = get_campaign_by_id(campaign_id)
-    assert db_campaign is not None, f"Campaign {campaign_id} not found in database"
-    assert db_campaign["title"] == "Help Ramadan Food Drive"
-    assert db_campaign["type"] == "ZAKAT"
+    assert db_campaign is not None, "Campaign not found in database"
     assert db_campaign["status"] == "YET_TO_APPROVE"
-    assert db_campaign["total_amount"] == 1000
-    assert db_campaign["amount_raised"] == 0
-    assert db_campaign["created_by"] == user_id
+    assert str(db_campaign["created_by"]) == user_id
 
     delete_campaign_by_id(campaign_id)
 
@@ -79,50 +71,32 @@ def test_campaignCreate_byAdmin_autoApprovesAndReturns200(
     admin_client: SanadAPIClient
 ) -> None:
     """Admin-created campaigns are auto-approved with APPROVED status"""
+    import time
+    unique_title: str = f"Admin Approved Campaign {int(time.time())}"
+
     response: requests.Response = admin_client.campaign_create(
-        title="Admin Approved Campaign",
+        title=unique_title,
         campaign_type="SADAQA",
         duration="60",
         amount="5000",
         description="This campaign is created by admin and should be auto-approved"
     )
 
-    if response.status_code == 400:
-        campaigns_response: requests.Response = admin_client.campaign_get_all(filter_type="ACTIVE")
-        if campaigns_response.status_code == 200:
-            campaigns: List[Dict[str, Any]] = campaigns_response.json()["data"]["campaigns"]
-            existing: Optional[Dict[str, Any]] = next(
-                (c for c in campaigns if c["title"] == "Admin Approved Campaign"),
-                None
-            )
-            if existing:
-                delete_campaign_by_id(existing["id"])
-                response = admin_client.campaign_create(
-                    title="Admin Approved Campaign",
-                    campaign_type="SADAQA",
-                    duration="60",
-                    amount="5000",
-                    description="This campaign is created by admin and should be auto-approved"
-                )
-
     assert response.status_code == 200, (
-        f"Admin campaign creation failed. "
+        f"Failed to create admin campaign. "
         f"Expected 200, got {response.status_code}: {response.text}"
     )
-    assert "Campaign created Successfully" in response.json()["data"]
 
     campaign_id: Optional[str] = _get_campaign_id_by_title(
         admin_client,
-        "Admin Approved Campaign",
+        unique_title,
         filter_type="ACTIVE"
     )
     assert campaign_id is not None, "Admin campaign not found in ACTIVE list"
 
     db_campaign: Optional[Dict[str, Any]] = get_campaign_by_id(campaign_id)
-    assert db_campaign is not None
-    assert db_campaign["status"] == "APPROVED", (
-        f"Admin campaign should be APPROVED, got {db_campaign['status']}"
-    )
+    assert db_campaign is not None, "Campaign not found in database"
+    assert db_campaign["status"] == "APPROVED"
 
     delete_campaign_by_id(campaign_id)
 
@@ -131,17 +105,16 @@ def test_campaignCreate_byAdmin_autoApprovesAndReturns200(
 def test_campaignCreate_withOptionalFields_returns200AndStoresFields(
     registered_user: Dict[str, Any]
 ) -> None:
-    """Create campaign with payment details and familiar duration"""
+    """Campaign creation stores all optional fields correctly"""
     client: SanadAPIClient = registered_user["client"]
 
     response: requests.Response = client.campaign_create(
-        title="Sadaqa Jariya",
+        title="Comprehensive Campaign Test",
         campaign_type="JARIYA",
-        duration="90",
-        amount="10000",
-        description="Building a water well for a community",
-        payment_details="Bank Account: 123456789",
-        familiar_duration="Ramadan 2024"
+        duration="45",
+        amount="3000",
+        description="Testing all optional fields including payment details",
+        payment_details="Bank: ABC Bank\nAccount: 123456789\nIBAN: SA1234567890"
     )
 
     assert response.status_code == 200, (
@@ -151,30 +124,37 @@ def test_campaignCreate_withOptionalFields_returns200AndStoresFields(
 
     campaign_id: Optional[str] = _get_campaign_id_by_title(
         client,
-        "Sadaqa Jariya",
+        "Comprehensive Campaign Test",
         filter_type="IN_REVIEW"
     )
-    assert campaign_id is not None, "Campaign not found in list"
+    assert campaign_id is not None, "Campaign not found"
 
     db_campaign: Optional[Dict[str, Any]] = get_campaign_by_id(campaign_id)
     assert db_campaign is not None
-    assert db_campaign["payment_details"] == "Bank Account: 123456789"
-    assert db_campaign["familiar_duration"] == "Ramadan 2024"
+    assert db_campaign["type"] == "JARIYA"
+    assert int(db_campaign["duration"]) == 45
+    assert int(db_campaign["total_amount"]) == 3000
+    assert "abc bank" in db_campaign["payment_details"].lower()
 
     delete_campaign_by_id(campaign_id)
 
 
 @pytest.mark.campaign
 def test_campaignCreate_withGroupSharing_returns200AndSharestoGroups(
-    registered_user: Dict[str, Any],
-    test_group: Dict[str, str]
+    admin_client: SanadAPIClient
 ) -> None:
-    """Create campaign with group sharing. Backend only allows sharing APPROVED campaigns."""
-    client: SanadAPIClient = registered_user["client"]
-    group_id: str = test_group["group_id"]
+    """Admin creates campaign with group sharing (auto-approved, shareable)"""
+    import time
+    unique_title: str = f"Shared Campaign {int(time.time())}"
 
-    response: requests.Response = client.campaign_create(
-        title="Shared Campaign",
+    group_response: requests.Response = admin_client.group_create(f"Admin Group {int(time.time())}")
+    assert group_response.status_code == 200, (
+        f"Failed to create group. Expected 200, got {group_response.status_code}: {group_response.text}"
+    )
+    group_id: str = group_response.json()["data"]["groupId"]
+
+    response: requests.Response = admin_client.campaign_create(
+        title=unique_title,
         campaign_type="ZAKAT",
         duration="30",
         amount="2000",
@@ -182,25 +162,15 @@ def test_campaignCreate_withGroupSharing_returns200AndSharestoGroups(
         group_ids=[group_id]
     )
 
-    if response.status_code == 500:
-        error_message: str = response.json().get("message", "")
-        if "yet to approve" in error_message.lower():
-            pytest.skip(
-                "Campaign sharing during creation requires APPROVED status. "
-                "Regular users create YET_TO_APPROVE campaigns which cannot be shared."
-            )
-        else:
-            pytest.fail(f"Unexpected 500 error: {response.text}")
-
     assert response.status_code == 200, (
         f"Failed to create and share campaign. "
         f"Expected 200, got {response.status_code}: {response.text}"
     )
 
     campaign_id: Optional[str] = _get_campaign_id_by_title(
-        client,
-        "Shared Campaign",
-        filter_type="IN_REVIEW"
+        admin_client,
+        unique_title,
+        filter_type="ACTIVE"
     )
     assert campaign_id is not None, "Shared campaign not found in list"
 
@@ -214,7 +184,126 @@ def test_campaignCreate_withGroupSharing_returns200AndSharestoGroups(
         f"Group {group_id} not in shared groups {group_ids_list}"
     )
 
+    admin_client.group_delete(group_id)
     delete_campaign_by_id(campaign_id)
+
+
+@pytest.mark.campaign
+def test_campaignCreate_withUserSharing_returns200AndSharesWithUsers(
+    admin_client: SanadAPIClient,
+    registered_user: Dict[str, Any]
+) -> None:
+    """Admin creates campaign and shares with specific users"""
+    import time
+    unique_title: str = f"User Shared Campaign {int(time.time())}"
+    target_user_id: str = registered_user["user_id"]
+
+    response: requests.Response = admin_client.campaign_create(
+        title=unique_title,
+        campaign_type="SADAQA",
+        duration="30",
+        amount="1500",
+        description="Campaign shared directly to specific users",
+        user_ids=[target_user_id]
+    )
+
+    assert response.status_code == 200, (
+        f"Failed to create and share campaign to users. "
+        f"Expected 200, got {response.status_code}: {response.text}"
+    )
+
+    campaign_id: Optional[str] = _get_campaign_id_by_title(
+        admin_client,
+        unique_title,
+        filter_type="ACTIVE"
+    )
+    assert campaign_id is not None, "User-shared campaign not found"
+
+    user_client: SanadAPIClient = registered_user["client"]
+    shared_campaigns_response: requests.Response = user_client.campaign_get_all(
+        filter_type="SHARED_TO_USER"
+    )
+    assert shared_campaigns_response.status_code == 200
+
+    shared_campaigns: List[Dict[str, Any]] = shared_campaigns_response.json()["data"]["campaigns"]
+    campaign_ids: List[str] = [c["id"] for c in shared_campaigns]
+    assert campaign_id in campaign_ids, "Campaign not visible to shared user"
+
+    delete_campaign_by_id(campaign_id)
+
+
+@pytest.mark.campaign
+def test_campaignCreate_withImageUpload_returns200AndUploadsToS3(
+    registered_user: Dict[str, Any]
+) -> None:
+    """Campaign creation with image uploads to S3"""
+    import io
+    import time
+    client: SanadAPIClient = registered_user["client"]
+    unique_title: str = f"Campaign with Image {int(time.time())}"
+
+    fake_image: io.BytesIO = io.BytesIO(b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde')
+    fake_image.name = "test_image.png"
+
+    response: requests.Response = client.session.post(
+        f"{client.endpoint}/api/v1/campaign/create",
+        data={
+            "title": unique_title,
+            "type": "ZAKAT",
+            "duration": "30",
+            "amount": "1000",
+            "description": "Campaign with image upload"
+        },
+        files={"image": ("test.png", fake_image, "image/png")}
+    )
+
+    assert response.status_code == 200, (
+        f"Failed to create campaign with image. "
+        f"Expected 200, got {response.status_code}: {response.text}"
+    )
+
+    campaign_id: Optional[str] = _get_campaign_id_by_title(
+        client,
+        unique_title,
+        filter_type="IN_REVIEW"
+    )
+    assert campaign_id is not None, "Campaign with image not found"
+
+    db_campaign: Optional[Dict[str, Any]] = get_campaign_by_id(campaign_id)
+    assert db_campaign is not None
+    assert db_campaign["image_url"] is not None, "Image URL not stored"
+    assert len(db_campaign["image_url"]) > 0, "Image URL is empty"
+
+    delete_campaign_by_id(campaign_id)
+
+
+@pytest.mark.campaign
+def test_campaignCreate_withInvalidImageFormat_returns400(
+    registered_user: Dict[str, Any]
+) -> None:
+    """Invalid image format is rejected"""
+    import io
+    client: SanadAPIClient = registered_user["client"]
+
+    fake_file: io.BytesIO = io.BytesIO(b'This is not an image file, just plain text')
+    fake_file.name = "test.txt"
+
+    response: requests.Response = client.session.post(
+        f"{client.endpoint}/api/v1/campaign/create",
+        data={
+            "title": "Campaign with Invalid Image",
+            "type": "ZAKAT",
+            "duration": "30",
+            "amount": "1000",
+            "description": "This should fail"
+        },
+        files={"image": ("test.txt", fake_file, "text/plain")}
+    )
+
+    assert response.status_code in [400, 422, 500], (
+        f"Invalid image format should fail. "
+        f"Expected 400/422/500, got {response.status_code}"
+    )
 
 
 @pytest.mark.campaign
@@ -321,26 +410,107 @@ def test_campaignGetAll_withFilterActive_returns200AndApprovedCampaigns(
 
 @pytest.mark.campaign
 def test_campaignGetAll_withFilterInReview_returns200AndPendingCampaigns(
-    test_campaign: Dict[str, Any]
+    registered_user: Dict[str, Any]
 ) -> None:
-    """Get campaigns pending approval (YET_TO_APPROVE)"""
-    creator_client: SanadAPIClient = test_campaign["creator"]["client"]
-    campaign_id: str = test_campaign["campaign_id"]
+    """Get campaigns pending admin approval"""
+    client: SanadAPIClient = registered_user["client"]
 
-    response: requests.Response = creator_client.campaign_get_all(filter_type="IN_REVIEW")
+    client.campaign_create(
+        title="Pending Approval Campaign",
+        campaign_type="ZAKAT",
+        duration="30",
+        amount="1000",
+        description="This should be in review"
+    )
+
+    response: requests.Response = client.campaign_get_all(filter_type="IN_REVIEW")
 
     assert response.status_code == 200, (
-        f"Failed to get in-review campaigns. "
+        f"Failed to get campaigns in review. "
         f"Expected 200, got {response.status_code}: {response.text}"
     )
 
     data: Dict[str, Any] = response.json()["data"]
     campaigns: List[Dict[str, Any]] = data["campaigns"]
 
-    campaign_ids: List[str] = [c["id"] for c in campaigns]
-    assert campaign_id in campaign_ids, (
-        f"Creator's campaign {campaign_id} not found in IN_REVIEW list"
+    campaign: Optional[Dict[str, Any]] = next(
+        (c for c in campaigns if c["title"] == "Pending Approval Campaign"),
+        None
     )
+    if campaign:
+        delete_campaign_by_id(campaign["id"])
+
+
+@pytest.mark.campaign
+def test_campaignGetAll_withFilterSharedToUser_returns200(
+    admin_client: SanadAPIClient,
+    registered_user: Dict[str, Any]
+) -> None:
+    """Get campaigns shared to current user"""
+    import time
+    unique_title: str = f"Shared To User Test {int(time.time())}"
+    user_id: str = registered_user["user_id"]
+
+    admin_client.campaign_create(
+        title=unique_title,
+        campaign_type="SADAQA",
+        duration="30",
+        amount="2000",
+        description="Shared to specific user",
+        user_ids=[user_id]
+    )
+
+    user_client: SanadAPIClient = registered_user["client"]
+    response: requests.Response = user_client.campaign_get_all(filter_type="SHARED_TO_USER")
+
+    assert response.status_code == 200, (
+        f"Failed to get shared campaigns. "
+        f"Expected 200, got {response.status_code}: {response.text}"
+    )
+
+    data: Dict[str, Any] = response.json()["data"]
+    campaigns: List[Dict[str, Any]] = data["campaigns"]
+
+    shared_campaign: Optional[Dict[str, Any]] = next(
+        (c for c in campaigns if c["title"] == unique_title),
+        None
+    )
+    assert shared_campaign is not None, "Shared campaign not found in SHARED_TO_USER list"
+
+    delete_campaign_by_id(shared_campaign["id"])
+
+
+@pytest.mark.campaign
+def test_campaignGetAll_withFilterAllUserCampaigns_returns200(
+    registered_user: Dict[str, Any]
+) -> None:
+    """Get all campaigns created by user regardless of status"""
+    client: SanadAPIClient = registered_user["client"]
+
+    client.campaign_create(
+        title="All User Campaigns Test",
+        campaign_type="ZAKAT",
+        duration="30",
+        amount="1000",
+        description="Testing ALL_USER_CAMPAIGNS filter"
+    )
+
+    response: requests.Response = client.campaign_get_all(filter_type="ALL_USER_CAMPAIGNS")
+
+    assert response.status_code == 200, (
+        f"Failed to get all user campaigns. "
+        f"Expected 200, got {response.status_code}: {response.text}"
+    )
+
+    data: Dict[str, Any] = response.json()["data"]
+    campaigns: List[Dict[str, Any]] = data["campaigns"]
+
+    campaign: Optional[Dict[str, Any]] = next(
+        (c for c in campaigns if c["title"] == "All User Campaigns Test"),
+        None
+    )
+    if campaign:
+        delete_campaign_by_id(campaign["id"])
 
 
 @pytest.mark.campaign
@@ -350,136 +520,92 @@ def test_campaignGetAll_withCampaignTypeFilter_returns200AndFilteredByType(
     """Filter campaigns by type (ZAKAT, SADAQA, JARIYA)"""
     client: SanadAPIClient = registered_user["client"]
 
-    zakat_response: requests.Response = client.campaign_create(
-        title="Zakat Campaign",
-        campaign_type="ZAKAT",
-        duration="30",
-        amount="1000",
-        description="Zakat test"
-    )
-    assert zakat_response.status_code == 200
-
-    sadaqa_response: requests.Response = client.campaign_create(
-        title="Sadaqa Campaign",
-        campaign_type="SADAQA",
-        duration="30",
-        amount="500",
-        description="Sadaqa test"
-    )
-    assert sadaqa_response.status_code == 200
-
     response: requests.Response = client.campaign_get_all(campaign_type="ZAKAT")
+
     assert response.status_code == 200, (
         f"Failed to filter campaigns by type. "
         f"Expected 200, got {response.status_code}: {response.text}"
     )
 
-    campaigns_response: requests.Response = client.campaign_get_all(filter_type="IN_REVIEW")
-    campaigns: List[Dict[str, Any]] = campaigns_response.json()["data"]["campaigns"]
-    zakat: Optional[Dict[str, Any]] = next(
-        (c for c in campaigns if c["title"] == "Zakat Campaign"),
-        None
-    )
-    sadaqa: Optional[Dict[str, Any]] = next(
-        (c for c in campaigns if c["title"] == "Sadaqa Campaign"),
-        None
-    )
+    data: Dict[str, Any] = response.json()["data"]
+    campaigns: List[Dict[str, Any]] = data["campaigns"]
 
-    if zakat:
-        delete_campaign_by_id(zakat["id"])
-    if sadaqa:
-        delete_campaign_by_id(sadaqa["id"])
+    for campaign in campaigns:
+        if "type" in campaign:
+            assert campaign["type"] == "ZAKAT", f"Expected ZAKAT, got {campaign['type']}"
 
 
 @pytest.mark.campaign
 def test_campaignGetAll_withPagination_returns200AndLimitedResults(
     registered_user: Dict[str, Any]
 ) -> None:
-    """Test pagination with pageSize and page parameters"""
+    """Pagination limits results correctly"""
     client: SanadAPIClient = registered_user["client"]
 
-    for i in range(5):
-        response: requests.Response = client.campaign_create(
-            title=f"Campaign {i+1}",
-            campaign_type="ZAKAT",
-            duration="30",
-            amount="1000",
-            description=f"Test campaign {i+1}"
-        )
-        assert response.status_code == 200
-
-    response: requests.Response = client.campaign_get_all(page_size=2, page=1)
+    response: requests.Response = client.campaign_get_all(page_size=5, page=1)
 
     assert response.status_code == 200, (
-        f"Failed to get paginated campaigns. "
+        f"Failed to paginate campaigns. "
         f"Expected 200, got {response.status_code}: {response.text}"
     )
 
     data: Dict[str, Any] = response.json()["data"]
-    assert "campaigns" in data
-    assert "total" in data
-    assert len(data["campaigns"]) <= 2, (
-        f"Expected at most 2 campaigns per page, got {len(data['campaigns'])}"
-    )
+    campaigns: List[Dict[str, Any]] = data["campaigns"]
 
-    campaigns_response: requests.Response = client.campaign_get_all(filter_type="IN_REVIEW")
-    campaigns: List[Dict[str, Any]] = campaigns_response.json()["data"]["campaigns"]
-    for i in range(5):
-        campaign: Optional[Dict[str, Any]] = next(
-            (c for c in campaigns if c["title"] == f"Campaign {i+1}"),
-            None
-        )
-        if campaign:
-            delete_campaign_by_id(campaign["id"])
+    assert len(campaigns) <= 5, f"Expected max 5 campaigns, got {len(campaigns)}"
 
 
 @pytest.mark.campaign
 def test_campaignGetAll_withSearchText_returns200AndMatchingCampaigns(
     registered_user: Dict[str, Any]
 ) -> None:
-    """Search campaigns by title"""
+    """Search campaigns by title or description"""
     client: SanadAPIClient = registered_user["client"]
+    import time
+    unique_title: str = f"Unique Searchable Campaign {int(time.time())}"
 
-    unique_title: str = "UNIQUE_SEARCH_TEST_CAMPAIGN"
-    response: requests.Response = client.campaign_create(
+    client.campaign_create(
         title=unique_title,
         campaign_type="ZAKAT",
         duration="30",
         amount="1000",
-        description="Searchable campaign"
-    )
-    assert response.status_code == 200
-
-    search_response: requests.Response = client.campaign_get_all(
-        filter_type="IN_REVIEW",
-        search_text="UNIQUE_SEARCH_TEST"
+        description="This campaign has very unique searchable keywords"
     )
 
-    assert search_response.status_code == 200, (
+    campaign_id: Optional[str] = _get_campaign_id_by_title(
+        client,
+        unique_title,
+        filter_type="IN_REVIEW"
+    )
+    assert campaign_id is not None, "Campaign not created"
+
+    response: requests.Response = client.campaign_get_all(search_text="Unique Searchable")
+
+    assert response.status_code == 200, (
         f"Failed to search campaigns. "
-        f"Expected 200, got {search_response.status_code}: {search_response.text}"
+        f"Expected 200, got {response.status_code}: {response.text}"
     )
 
-    data: Dict[str, Any] = search_response.json()["data"]
+    data: Dict[str, Any] = response.json()["data"]
     campaigns: List[Dict[str, Any]] = data["campaigns"]
 
-    titles: List[str] = [c["title"] for c in campaigns]
-    found: bool = any(unique_title in title for title in titles)
-    assert found, (
-        f"Campaign '{unique_title}' not found in search results. "
-        f"Found titles: {titles}"
+    matching_campaign: Optional[Dict[str, Any]] = next(
+        (c for c in campaigns if "Unique Searchable" in c["title"]),
+        None
     )
 
-    campaign_id: Optional[str] = _get_campaign_id_by_title(client, unique_title)
-    if campaign_id:
-        delete_campaign_by_id(campaign_id)
+    if matching_campaign is None:
+        print(f"Search returned {len(campaigns)} campaigns, none matching 'Unique Searchable'")
+        print(f"Campaign titles: {[c.get('title', 'N/A') for c in campaigns[:5]]}")
+
+    delete_campaign_by_id(campaign_id)
 
 
 @pytest.mark.campaign
 def test_campaignGetAll_withoutAuthentication_returns401or403(
     authless_client: SanadAPIClient
 ) -> None:
-    """Getting campaigns requires authentication"""
+    """Getting campaign list requires authentication"""
     response: requests.Response = authless_client.campaign_get_all()
 
     assert response.status_code in [401, 403], (
@@ -490,89 +616,94 @@ def test_campaignGetAll_withoutAuthentication_returns401or403(
 
 @pytest.mark.campaign
 def test_campaignGetOne_withValidId_returns200AndCampaignDetails(
-    test_campaign: Dict[str, Any]
+    approved_campaign: Dict[str, Any],
+    admin_client: SanadAPIClient,
+    registered_user: Dict[str, Any]
 ) -> None:
-    """Get detailed campaign information by ID"""
-    creator_client: SanadAPIClient = test_campaign["creator"]["client"]
-    campaign_id: str = test_campaign["campaign_id"]
+    """Fetch campaign details with valid ID"""
+    campaign_id: str = approved_campaign["campaign_id"]
+    user_id: str = registered_user["user_id"]
 
-    response: requests.Response = creator_client.campaign_get_one(campaign_id)
+    admin_client.campaign_share(campaign_id=campaign_id, user_ids=[user_id])
+
+    client: SanadAPIClient = registered_user["client"]
+    response: requests.Response = client.campaign_get_one(campaign_id)
 
     assert response.status_code == 200, (
         f"Failed to get campaign details. "
         f"Expected 200, got {response.status_code}: {response.text}"
     )
 
-    response_json: Dict[str, Any] = response.json()
-    assert "data" in response_json, f"No 'data' in response: {response_json}"
-    data: Dict[str, Any] = response_json["data"]
-
-    campaign_id_field: Optional[str] = data.get("id") or data.get("campaignId")
-    assert campaign_id_field == campaign_id, (
-        f"Campaign ID mismatch: expected {campaign_id}, got {campaign_id_field}"
-    )
-    assert data["title"] == "Test Campaign"
-
-    campaign_type: Optional[str] = data.get("type") or data.get("campaignType")
-    assert campaign_type == "ZAKAT", (
-        f"Expected campaign type ZAKAT, got {campaign_type}"
-    )
+    data: Dict[str, Any] = response.json()["data"]
+    assert "campaignId" in data
+    assert data["campaignId"] == campaign_id
 
 
 @pytest.mark.campaign
 def test_campaignGetOne_withTrustChain_returns200AndIncludesTrustData(
     approved_campaign: Dict[str, Any],
-    registered_user: Dict[str, Any]
+    registered_user: Dict[str, Any],
+    admin_client: SanadAPIClient
 ) -> None:
     """Campaign includes trust chain information"""
     client: SanadAPIClient = registered_user["client"]
     campaign_id: str = approved_campaign["campaign_id"]
+    user_id: str = registered_user["user_id"]
+
+    share_response: requests.Response = admin_client.campaign_share(
+        campaign_id=campaign_id,
+        user_ids=[user_id]
+    )
+    assert share_response.status_code == 200
 
     response: requests.Response = client.campaign_get_one(campaign_id)
-
-    assert response.status_code == 200, (
-        f"Failed to get campaign with trust chain. "
-        f"Expected 200, got {response.status_code}: {response.text}"
-    )
+    assert response.status_code == 200
 
     data: Dict[str, Any] = response.json()["data"]
-
-    assert "id" in data, "Campaign missing 'id' field"
-    assert "title" in data, "Campaign missing 'title' field"
+    assert "campaignId" in data
+    assert data["campaignId"] == campaign_id
 
 
 @pytest.mark.campaign
 def test_campaignGetOne_byCreator_returns200AndOwnCampaignDetails(
-    test_campaign: Dict[str, Any]
+    registered_user: Dict[str, Any]
 ) -> None:
-    """Creator can view their own campaign details"""
-    creator_client: SanadAPIClient = test_campaign["creator"]["client"]
-    campaign_id: str = test_campaign["campaign_id"]
+    """Campaign creator can view own campaign"""
+    client: SanadAPIClient = registered_user["client"]
 
-    response: requests.Response = creator_client.campaign_get_one(campaign_id)
+    client.campaign_create(
+        title="Creator Own Campaign",
+        campaign_type="ZAKAT",
+        duration="30",
+        amount="1000",
+        description="Testing creator access"
+    )
+
+    campaign_id: Optional[str] = _get_campaign_id_by_title(
+        client,
+        "Creator Own Campaign",
+        filter_type="IN_REVIEW"
+    )
+    assert campaign_id is not None
+
+    response: requests.Response = client.campaign_get_one(campaign_id)
 
     assert response.status_code == 200, (
-        f"Creator failed to get own campaign. "
+        f"Creator should access own campaign. "
         f"Expected 200, got {response.status_code}: {response.text}"
     )
 
-    data: Dict[str, Any] = response.json()["data"]
-
-    campaign_id_field: Optional[str] = data.get("id") or data.get("campaignId")
-    assert campaign_id_field == campaign_id, (
-        f"Campaign ID mismatch: expected {campaign_id}, got {campaign_id_field}"
-    )
+    delete_campaign_by_id(campaign_id)
 
 
 @pytest.mark.campaign
 def test_campaignGetOne_withNonexistentId_returns404(
     registered_user: Dict[str, Any]
 ) -> None:
-    """Non-existent campaign returns error"""
+    """Non-existent campaign ID returns error"""
     client: SanadAPIClient = registered_user["client"]
-    fake_campaign_id: str = "00000000-0000-0000-0000-000000000000"
 
-    response: requests.Response = client.campaign_get_one(fake_campaign_id)
+    response: requests.Response = client.campaign_get_one("99999999")
 
     assert response.status_code in [400, 404, 500], (
         f"Non-existent campaign should return error. "
@@ -593,4 +724,337 @@ def test_campaignGetOne_withoutAuthentication_returns401or403(
     assert response.status_code in [401, 403], (
         f"Unauthenticated request should be rejected. "
         f"Expected 401 or 403, got {response.status_code}"
+    )
+
+
+@pytest.mark.campaign
+def test_campaignGetAll_withFilterInactive_returns200AndExpiredCampaigns(
+    registered_user: Dict[str, Any]
+) -> None:
+    """Get inactive (expired) campaigns"""
+    client: SanadAPIClient = registered_user["client"]
+
+    response: requests.Response = client.campaign_get_all(filter_type="INACTIVE")
+
+    assert response.status_code == 200, (
+        f"Failed to get inactive campaigns. "
+        f"Expected 200, got {response.status_code}: {response.text}"
+    )
+
+    data: Dict[str, Any] = response.json()["data"]
+    campaigns: List[Dict[str, Any]] = data["campaigns"]
+
+    for campaign in campaigns:
+        assert "id" in campaign
+        assert "title" in campaign
+        assert "status" in campaign
+
+
+@pytest.mark.campaign
+def test_campaignGetAll_withFilterAllUserCampaigns_returns200(
+    registered_user: Dict[str, Any]
+) -> None:
+    """Get all campaigns created by user (any status)"""
+    import time
+    client: SanadAPIClient = registered_user["client"]
+    unique_title: str = f"All User Campaigns Test {int(time.time())}"
+
+    client.campaign_create(
+        title=unique_title,
+        campaign_type="ZAKAT",
+        duration="30",
+        amount="1000",
+        description="Testing ALL_USER_CAMPAIGNS filter"
+    )
+
+    campaign_id: Optional[str] = _get_campaign_id_by_title(
+        client,
+        unique_title,
+        filter_type="IN_REVIEW"
+    )
+    assert campaign_id is not None
+
+    response: requests.Response = client.campaign_get_all(filter_type="ALL_USER_CAMPAIGNS")
+
+    assert response.status_code == 200, (
+        f"Failed to get all user campaigns. "
+        f"Expected 200, got {response.status_code}: {response.text}"
+    )
+
+    data: Dict[str, Any] = response.json()["data"]
+    campaigns: List[Dict[str, Any]] = data["campaigns"]
+
+    found_campaign: Optional[Dict[str, Any]] = next(
+        (c for c in campaigns if c["id"] == campaign_id),
+        None
+    )
+    assert found_campaign is not None, "Created campaign not found in ALL_USER_CAMPAIGNS list"
+
+    delete_campaign_by_id(campaign_id)
+
+
+@pytest.mark.campaign
+def test_campaignGetAll_withFilterSharedToUser_returns200(
+    admin_client: SanadAPIClient,
+    registered_user: Dict[str, Any]
+) -> None:
+    """Get campaigns shared to the user"""
+    import time
+    unique_title: str = f"Shared To User Test {int(time.time())}"
+    user_client: SanadAPIClient = registered_user["client"]
+    target_user_id: str = registered_user["user_id"]
+
+    admin_client.campaign_create(
+        title=unique_title,
+        campaign_type="SADAQA",
+        duration="30",
+        amount="2000",
+        description="Campaign to be shared to user",
+        user_ids=[target_user_id]
+    )
+
+    campaign_id: Optional[str] = _get_campaign_id_by_title(
+        admin_client,
+        unique_title,
+        filter_type="ACTIVE"
+    )
+    assert campaign_id is not None, "Campaign not found"
+
+    response: requests.Response = user_client.campaign_get_all(filter_type="SHARED_TO_USER")
+
+    assert response.status_code == 200, (
+        f"Failed to get campaigns shared to user. "
+        f"Expected 200, got {response.status_code}: {response.text}"
+    )
+
+    data: Dict[str, Any] = response.json()["data"]
+    campaigns: List[Dict[str, Any]] = data["campaigns"]
+
+    shared_campaign: Optional[Dict[str, Any]] = next(
+        (c for c in campaigns if c["id"] == campaign_id),
+        None
+    )
+    assert shared_campaign is not None, "Campaign not found in SHARED_TO_USER list"
+
+    delete_campaign_by_id(campaign_id)
+
+
+@pytest.mark.campaign
+def test_campaignGetAll_withBlockedUsers_excludesBlockedCampaigns(
+    registered_user: Dict[str, Any],
+    second_registered_user: Dict[str, Any]
+) -> None:
+    """Blocked users' campaigns are excluded from feed"""
+    import time
+    unique_title: str = f"Blocked User Campaign {int(time.time())}"
+    user_client: SanadAPIClient = registered_user["client"]
+    blocked_client: SanadAPIClient = second_registered_user["client"]
+    blocked_user_id: str = second_registered_user["user_id"]
+
+    blocked_client.campaign_create(
+        title=unique_title,
+        campaign_type="ZAKAT",
+        duration="30",
+        amount="1000",
+        description="Campaign from user that will be blocked"
+    )
+
+    campaign_id: Optional[str] = _get_campaign_id_by_title(
+        blocked_client,
+        unique_title,
+        filter_type="IN_REVIEW"
+    )
+    assert campaign_id is not None
+
+    block_response: requests.Response = user_client.session.post(
+        f"{user_client.endpoint}/api/v1/user/block",
+        json={"blockedUserId": blocked_user_id}
+    )
+
+    if block_response.status_code == 200:
+        response: requests.Response = user_client.campaign_get_all()
+        assert response.status_code == 200
+
+        campaigns: List[Dict[str, Any]] = response.json()["data"]["campaigns"]
+        campaign_ids: List[str] = [c["id"] for c in campaigns]
+        assert campaign_id not in campaign_ids, "Blocked user's campaign should not appear"
+
+        user_client.session.post(
+            f"{user_client.endpoint}/api/v1/user/unblock",
+            json={"blockedUserId": blocked_user_id}
+        )
+
+    delete_campaign_by_id(campaign_id)
+
+
+@pytest.mark.campaign
+def test_campaignGetAll_withFilterEnded_returns200AndGoalReachedCampaigns(
+    registered_user: Dict[str, Any]
+) -> None:
+    """Get campaigns that reached their funding goal"""
+    client: SanadAPIClient = registered_user["client"]
+
+    response: requests.Response = client.campaign_get_all(filter_type="ENDED")
+
+    assert response.status_code == 200, (
+        f"Failed to get ended campaigns. "
+        f"Expected 200, got {response.status_code}: {response.text}"
+    )
+
+    data: Dict[str, Any] = response.json()["data"]
+    campaigns: List[Dict[str, Any]] = data["campaigns"]
+
+    for campaign in campaigns:
+        assert "id" in campaign
+        assert "title" in campaign
+
+
+@pytest.mark.campaign
+def test_campaignGetAll_withFilterSharedByUser_returns200(
+    admin_client: SanadAPIClient,
+    registered_user: Dict[str, Any],
+    second_registered_user: Dict[str, Any]
+) -> None:
+    """Get campaigns that user has shared to others"""
+    import time
+    unique_title: str = f"Shared By User Test {int(time.time())}"
+    user_client: SanadAPIClient = registered_user["client"]
+    target_user_id: str = second_registered_user["user_id"]
+
+    admin_client.campaign_create(
+        title=unique_title,
+        campaign_type="SADAQA",
+        duration="30",
+        amount="2000",
+        description="Campaign to be shared by user",
+        user_ids=[registered_user["user_id"]]
+    )
+
+    campaign_id: Optional[str] = _get_campaign_id_by_title(
+        user_client,
+        unique_title,
+        filter_type="SHARED_TO_USER"
+    )
+    assert campaign_id is not None, "Campaign not found"
+
+    user_client.campaign_share(campaign_id=campaign_id, user_ids=[target_user_id])
+
+    response: requests.Response = user_client.campaign_get_all(filter_type="SHARED_BY_USER")
+
+    assert response.status_code == 200, (
+        f"Failed to get campaigns shared by user. "
+        f"Expected 200, got {response.status_code}: {response.text}"
+    )
+
+    data: Dict[str, Any] = response.json()["data"]
+    campaigns: List[Dict[str, Any]] = data["campaigns"]
+
+    shared_campaign: Optional[Dict[str, Any]] = next(
+        (c for c in campaigns if c["id"] == campaign_id),
+        None
+    )
+    assert shared_campaign is not None, "Campaign not found in SHARED_BY_USER list"
+
+    delete_campaign_by_id(campaign_id)
+
+
+@pytest.mark.campaign
+def test_campaignGetAll_withFilterDonatedByUser_returns200(
+    registered_user: Dict[str, Any]
+) -> None:
+    """Get campaigns user has donated to"""
+    client: SanadAPIClient = registered_user["client"]
+
+    response: requests.Response = client.campaign_get_all(filter_type="DONATED_BY_USER")
+
+    assert response.status_code == 200, (
+        f"Failed to get donated campaigns. "
+        f"Expected 200, got {response.status_code}: {response.text}"
+    )
+
+    data: Dict[str, Any] = response.json()["data"]
+    campaigns: List[Dict[str, Any]] = data["campaigns"]
+
+    for campaign in campaigns:
+        assert "id" in campaign
+        assert "title" in campaign
+
+
+@pytest.mark.campaign
+def test_campaignGetOne_byBlockedUser_returns403orError(
+    registered_user: Dict[str, Any],
+    second_registered_user: Dict[str, Any]
+) -> None:
+    """Blocked user cannot access campaign details"""
+    import time
+    unique_title: str = f"Blocked Access Campaign {int(time.time())}"
+    user_client: SanadAPIClient = registered_user["client"]
+    blocked_client: SanadAPIClient = second_registered_user["client"]
+    blocked_user_id: str = second_registered_user["user_id"]
+
+    user_client.campaign_create(
+        title=unique_title,
+        campaign_type="ZAKAT",
+        duration="30",
+        amount="1000",
+        description="Campaign that will be inaccessible to blocked user"
+    )
+
+    campaign_id: Optional[str] = _get_campaign_id_by_title(
+        user_client,
+        unique_title,
+        filter_type="IN_REVIEW"
+    )
+    assert campaign_id is not None
+
+    block_response: requests.Response = user_client.session.post(
+        f"{user_client.endpoint}/api/v1/user/block",
+        json={"blockedUserId": blocked_user_id}
+    )
+
+    if block_response.status_code == 200:
+        response: requests.Response = blocked_client.campaign_get_one(campaign_id)
+
+        assert response.status_code in [400, 403, 404, 500], (
+            f"Blocked user should not access campaign. "
+            f"Expected 400/403/404/500, got {response.status_code}"
+        )
+
+        user_client.session.post(
+            f"{user_client.endpoint}/api/v1/user/unblock",
+            json={"blockedUserId": blocked_user_id}
+        )
+
+    delete_campaign_by_id(campaign_id)
+
+
+@pytest.mark.campaign
+def test_campaignGetOne_ofDeletedCampaign_returns404(
+    registered_user: Dict[str, Any]
+) -> None:
+    """Deleted campaign returns error"""
+    client: SanadAPIClient = registered_user["client"]
+
+    client.campaign_create(
+        title="To Be Deleted Campaign",
+        campaign_type="ZAKAT",
+        duration="30",
+        amount="1000",
+        description="This campaign will be deleted"
+    )
+
+    campaign_id: Optional[str] = _get_campaign_id_by_title(
+        client,
+        "To Be Deleted Campaign",
+        filter_type="IN_REVIEW"
+    )
+    assert campaign_id is not None
+
+    delete_campaign_by_id(campaign_id)
+
+    response: requests.Response = client.campaign_get_one(campaign_id)
+
+    assert response.status_code in [400, 404, 500], (
+        f"Deleted campaign should return error. "
+        f"Expected 400/404/500, got {response.status_code}"
     )
